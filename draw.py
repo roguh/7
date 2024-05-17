@@ -276,6 +276,7 @@ def main(test_args=None):
 
     args = parser.parse_args(test_args)
     levels = args.levels
+    expected_count = sum(7 * 4**n for n in range(levels))
     arg_summary = f"{levels}_{args.size}_{args.childsizing}_{args.colors}"
 
     color_levels: BrewerSubThemeType = str(max(3, min(10, levels)))
@@ -312,7 +313,8 @@ def main(test_args=None):
         args.size,
         algo(args.size, levels),
         algo(algo(args.size, levels), levels - 1),
-        args,
+        "expected total shapes:",
+        expected_count,
     )
 
     # TODO: --start-color --end-color --theme (Brewer custom, reverse, etc)
@@ -333,7 +335,7 @@ def main(test_args=None):
     if tqdm:
         # The root heptagon builds 7 heptagons around it (factor of 7)
         # Each heptagon has 4 children on its outer edges (powers of 4)
-        progress_bar = tqdm.tqdm(total=sum(7 * 4**n for n in range(levels)))
+        progress_bar = tqdm.tqdm(total=expected_count)
 
     try:
         heptagons(
