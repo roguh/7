@@ -10,10 +10,13 @@ FELINA@FELINA.ART
 """
 import argparse
 from collections import defaultdict
+import json
 import pprint
 import random
+import sys
 import time
-from typing import Callable
+from typing import Callable, Literal
+import zipfile
 
 try:
     import tqdm
@@ -49,13 +52,17 @@ CHILD_SIZING_ALGORITHMS: dict[str, Callable[[float, int], float]] = {
     "m57_77": lambda s, l: s * (6 + (1 * (-1) ** l)) / 7,
 }
 
+COLOR_CHOICES = []
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--levels", type=int, required=True)
 parser.add_argument("--size", type=int, default=50)
 parser.add_argument(
     "--colors",
-    choices=["BrewerPuRd9", "BrewerYlGn7", "BrewerYlGnBu7"],
-    default="BrewerPuRd9",
+    default="PuRd",
+)
+parser.add_argument(
+    "--reverse-colors",
+    action="store_true",
 )
 parser.add_argument("--quit", action="store_true")
 parser.add_argument("--write", action="store_true")
@@ -75,7 +82,46 @@ guy.shape("turtle")
 guy.shapesize(2, 2)
 
 
-def print_side_number(side: int, color: tuple[int, int, int], font_size: int = 13):
+# Example: ['YlGnBu']['9']
+RawBrewerDictType = dict[str, dict[str, list[str]]]
+ColorType = tuple[int, int, int]
+BrewerSubThemeType = Literal["3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]
+BrewerDictType = dict[str, dict[BrewerSubThemeType, list[ColorType]]]
+# 3456789
+
+
+def load_json_zip(filename: str) -> BrewerDictType:
+    """Parse colorbrewer.json file with accurate type hints."""
+    with zipfile.ZipFile(filename) as zf:
+        data: RawBrewerDictType = json.loads(zf.read(name="colorbrewer.json"))
+    int_data: BrewerDictType = {}
+    for theme, colorlist in data.items():
+        int_data[theme] = {}
+        for subtheme, colors in colorlist.items():
+            if subtheme == "type":
+                continue
+            assert subtheme in [
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                "10",
+                "11",
+                "12",
+            ], f"{subtheme} {colors}"
+            int_data[theme][subtheme] = []
+            # Reversed looks better imho
+            for color in reversed(colors):
+                ll = color.replace("rgb(", "").replace(")", "").split(",")
+                assert len(ll) == 3, f"{color} {ll} {colorlist}"
+                int_data[theme][subtheme].append(tuple(int(v) for v in ll))
+    return int_data
+
+
+def print_side_number(side: int, color: ColorType, font_size: int = 13):
     """Label each of the 7 side labels in Roman numerals."""
     r, g, b = color
     label = str(side)
@@ -101,43 +147,22 @@ BrewerPuRd9 = [
     (152, 0, 67),
     (103, 0, 31),
 ]
-BrewerYlGn7 = [
-    (255, 255, 204),
-    (217, 240, 163),
-    (173, 221, 142),
-    (120, 198, 121),
-    (65, 171, 93),
-    (35, 132, 67),
-    (0, 90, 50),
-]
-BrewerYlGnBu7 = [
-    (199, 233, 180),
-    (127, 205, 187),
-    (65, 182, 196),
-    (29, 145, 192),
-    (34, 94, 168),
-    (12, 44, 132),
-]
 BrewerPuRd9.reverse()
-BrewerYlGn7.reverse()
-BrewerYlGnBu7.reverse()
-# BrewerPuRd9.insert(0, (0, 255, 0))
-# BrewerPuRd9.insert(0, (255, 0, 255))
-
-ORIGINAL = [(255, 0, 0), (255, 196, 0), (196, 48, 0), (255, 96, 0)]
+OriginalColors = [(255, 0, 0), (255, 196, 0), (196, 48, 0), (255, 96, 0)]
 
 
 # wow:
 # levels=3,2 size=[(10,20,30), 100, 100, 100, ...]
 def heptagons(
-    size,
-    direction=1,
-    levels=0,
-    max_levels=0,
+    size: float,
+    colors: list[ColorType],
+    direction: float = 1,
+    levels: int = 0,
+    max_levels: int = 0,
     progress_bar=None,
-    root=True,
-    parent_side=0,
-    writing=False,
+    root: bool = True,
+    parent_side: int = 0,
+    writing: bool = False,
     childsizing: Callable[[float, int], float] = lambda x, _: x,
     args=None,
 ) -> tuple[int, int]:
@@ -147,11 +172,7 @@ def heptagons(
     turtle.delay(0)
     turtle.colormode(255)
 
-    colors = BrewerPuRd9
-    if args and args.colors:
-        colors = eval(args.colors)
     if root:
-        colors.insert(levels, (0, 0, 0))
         # Center
         guy.penup()
         guy.setpos(-size / 2, size)
@@ -203,6 +224,7 @@ def heptagons(
             # Draw child heptagon
             max_x, max_y = heptagons(
                 child_size,
+                colors=colors,
                 direction=-direction,
                 levels=levels - 1,
                 max_levels=max_levels,
@@ -294,9 +316,26 @@ def main(test_args=None):
         # The root heptagon builds 7 heptagons around it (factor of 7)
         # Each heptagon has 4 children on its outer edges (powers of 4)
         progress_bar = tqdm.tqdm(total=sum(7 * 4**n for n in range(levels)))
+
+    color_levels: BrewerSubThemeType = str(max(3, min(10, levels)))
+    themes = load_json_zip("./colorbrewer.json.zip")
+    for theme in themes:
+        COLOR_CHOICES.append(theme)
+    try:
+        colors = themes[args.colors][color_levels]
+    except KeyError:
+        print(f"Unknown color {args.colors} {color_levels}")
+        print(f"Known: {'\n'.join(themes.keys())}\nLevels 3 to 10")
+        sys.exit(0xFF)
+    if args.reverse_colors:
+        colors.reverse()
+    if args and args.colors:
+        colors.insert(levels, (0, 0, 0))
+
     try:
         heptagons(
             args.size,
+            colors=colors,
             levels=levels,
             max_levels=levels,
             progress_bar=progress_bar,
