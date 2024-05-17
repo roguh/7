@@ -58,7 +58,7 @@ parser.add_argument("--levels", type=int, required=True)
 parser.add_argument("--size", type=int, default=50)
 parser.add_argument(
     "--colors",
-    default="PuRd",
+    required=True,
 )
 parser.add_argument(
     "--reverse-colors",
@@ -90,35 +90,11 @@ BrewerDictType = dict[str, dict[BrewerSubThemeType, list[ColorType]]]
 # 3456789
 
 
-def load_json_zip(filename: str) -> BrewerDictType:
+def load_themes(filename: str="colorbrewer_rgb_3int.json.zip") -> BrewerDictType:
     """Parse colorbrewer.json file with accurate type hints."""
     with zipfile.ZipFile(filename) as zf:
-        data: RawBrewerDictType = json.loads(zf.read(name="colorbrewer.json"))
-    int_data: BrewerDictType = {}
-    for theme, colorlist in data.items():
-        int_data[theme] = {}
-        for subtheme, colors in colorlist.items():
-            if subtheme == "type":
-                continue
-            assert subtheme in [
-                "3",
-                "4",
-                "5",
-                "6",
-                "7",
-                "8",
-                "9",
-                "10",
-                "11",
-                "12",
-            ], f"{subtheme} {colors}"
-            int_data[theme][subtheme] = []
-            # Reversed looks better imho
-            for color in reversed(colors):
-                ll = color.replace("rgb(", "").replace(")", "").split(",")
-                assert len(ll) == 3, f"{color} {ll} {colorlist}"
-                int_data[theme][subtheme].append(tuple(int(v) for v in ll))
-    return int_data
+        data: RawBrewerDictType = json.loads(zf.read(name="colorbrewer_rgb_3int.json"))
+    return data
 
 
 def print_side_number(side: int, color: ColorType, font_size: int = 13):
@@ -318,7 +294,7 @@ def main(test_args=None):
         progress_bar = tqdm.tqdm(total=sum(7 * 4**n for n in range(levels)))
 
     color_levels: BrewerSubThemeType = str(max(3, min(10, levels)))
-    themes = load_json_zip("./colorbrewer.json.zip")
+    themes = load_themes()
     for theme in themes:
         COLOR_CHOICES.append(theme)
     try:
