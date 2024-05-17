@@ -11,7 +11,14 @@ FELINA@FELINA.ART
 import argparse
 from collections import defaultdict
 import pprint
+import random
 import time
+from typing import Callable
+
+try:
+    import tqdm
+except ImportError:
+    tqdm = None
 
 try:
     import turtle
@@ -26,22 +33,35 @@ except ImportError as exc:
     raise exc
 
 SKIP2 = True  # moar fast
-CHILD_SIZING_ALGORITHMS = {
-    "id": lambda s: s,
-    "p67": lambda s: s ** (6 / 7),
-    "p97": lambda s: s ** (9 / 7),
-    "m57": lambda s: s * 5 / 7,
-    "m37": lambda s: s * 3 / 7,  # VERY NICE alignment
-    "1m37": lambda s: s * 3 / 7 if int(s) == s else s,  # VERY NICE alignment
-    "Mm37": lambda s: s * 3 / 7 if s > 20 else s,  # VERY NICE alignment
-    "m97": lambda s: s * 9 / 7,
+CHILD_SIZING_ALGORITHMS: dict[str, Callable[[float, int], float]] = {
+    "id": lambda s, _: s,
+    "p67": lambda s, _: s ** (6 / 7),
+    "p97": lambda s, _: s ** (9 / 7),
+    "m57": lambda s, _: s * 5 / 7,
+    "m37": lambda s, _: s * 3 / 7,  # VERY NICE alignment
+    "1m37": lambda s, _: s * 3 / 7 if int(s) == s else s,  # VERY NICE alignment
+    "Mm37": lambda s, _: s * 3 / 7 if s > 20 else s,  # VERY NICE alignment
+    "m97": lambda s, _: s * 9 / 7,
+    "m117": lambda s, _: s * 11 / 7,
+    "m57_97": lambda s, l: s * (7 + (2 * (-1) ** l)) / 7,
+    "m37_117": lambda s, l: s * (7 + (4 * (-1) ** l)) / 7,
+    "m37_77": lambda s, l: s * (5 + (4 * (-1) ** l)) / 7,
+    "m57_77": lambda s, l: s * (6 + (1 * (-1) ** l)) / 7,
 }
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--levels", type=int, required=True)
 parser.add_argument("--size", type=int, default=50)
+parser.add_argument(
+    "--colors",
+    choices=["BrewerPuRd9", "BrewerYlGn7", "BrewerYlGnBu7"],
+    default="BrewerPuRd9",
+)
+parser.add_argument("--quit", action="store_true")
 parser.add_argument("--write", action="store_true")
 parser.add_argument("--light-mode", action="store_true")
+parser.add_argument("--skip2", action="store_true")
+parser.add_argument("--random-angle", action="store_true")
 parser.add_argument(
     "--childsizing", choices=CHILD_SIZING_ALGORITHMS.keys(), default="id"
 )
@@ -70,7 +90,7 @@ def print_side_number(side: int, color: tuple[int, int, int], font_size: int = 1
     guy.color(color)
 
 
-BREWER_PuRd9 = [
+BrewerPuRd9 = [
     (247, 244, 249),
     (231, 225, 239),
     (212, 185, 218),
@@ -81,9 +101,28 @@ BREWER_PuRd9 = [
     (152, 0, 67),
     (103, 0, 31),
 ]
-BREWER_PuRd9.reverse()
-BREWER_PuRd9.insert(0, (0, 255, 0))
-# BREWER_PuRd9.insert(0, (255, 0, 255))
+BrewerYlGn7 = [
+    (255, 255, 204),
+    (217, 240, 163),
+    (173, 221, 142),
+    (120, 198, 121),
+    (65, 171, 93),
+    (35, 132, 67),
+    (0, 90, 50),
+]
+BrewerYlGnBu7 = [
+    (199, 233, 180),
+    (127, 205, 187),
+    (65, 182, 196),
+    (29, 145, 192),
+    (34, 94, 168),
+    (12, 44, 132),
+]
+BrewerPuRd9.reverse()
+BrewerYlGn7.reverse()
+BrewerYlGnBu7.reverse()
+# BrewerPuRd9.insert(0, (0, 255, 0))
+# BrewerPuRd9.insert(0, (255, 0, 255))
 
 ORIGINAL = [(255, 0, 0), (255, 196, 0), (196, 48, 0), (255, 96, 0)]
 
@@ -94,10 +133,13 @@ def heptagons(
     size,
     direction=1,
     levels=0,
+    max_levels=0,
+    progress_bar=None,
     root=True,
     parent_side=0,
     writing=False,
-    childsizing=lambda x: x,
+    childsizing: Callable[[float, int], float] = lambda x, _: x,
+    args=None,
 ) -> tuple[int, int]:
     """Draw a recursive, overlapping heptagon tile pattern."""
     # Draw as fast as possible
@@ -105,11 +147,12 @@ def heptagons(
     turtle.delay(0)
     turtle.colormode(255)
 
-    colors = BREWER_PuRd9
+    colors = BrewerPuRd9
+    if args and args.colors:
+        colors = eval(args.colors)
     if root:
-        # Root heptagon is black
-        r, g, b = turtle.bgcolor()
-        colors.insert(levels, (255, 255, 255))
+        colors.insert(levels, (0, 0, 0))
+        # Center
         guy.penup()
         guy.setpos(-size / 2, size)
         guy.pendown()
@@ -124,23 +167,34 @@ def heptagons(
         # This helps a lot with limiting recursion, closer to the hyperbolic tiling too
         is_outer = side not in [0, 1, 6]
 
-        child_size = childsizing(size)
+        child_size = childsizing(size, levels)
 
-        (r, g, _) = colors[levels % len(colors)]
-        b = (parent_side * 40) % 255
-        if SKIP2:
+        (r, g, b) = colors[levels % len(colors)]
+        b = (b + parent_side * 80) % 128
+        if args and args.skip2:
             if side in [3, 6]:
                 guy.penup()
             else:
                 guy.pendown()
         guy.color((r, g, b))
 
-        # Draw first part 1 side
         pensize = levels * 3 + 1
         guy.pensize(pensize)
-        size0 = max(0, (size - child_size) / 2)
-        if size0 > 0:
-            guy.forward(size0)
+        offset = 0
+        if child_size < size:
+            # Draw first part 1 side
+            # Child line is in the middle of this side
+            offset = max(0, (size - child_size) / 2)
+            if offset > 0:
+                guy.forward(offset)
+        elif child_size > size:
+            # Child side length is larger than parent side length
+            offset = child_size / 2 - size / 2
+            pendown = guy.pen()["pendown"]
+            guy.pen(pendown=False)
+            guy.backward(offset)
+            guy.pen(pendown=pendown)
+
         # TODO NEW_SHAPE.eps
         # turn right(dir*360/7)
         # after going forward(size-childsize)/2 guy.right(direction * 360 / 7)
@@ -151,9 +205,12 @@ def heptagons(
                 child_size,
                 direction=-direction,
                 levels=levels - 1,
+                max_levels=max_levels,
+                progress_bar=progress_bar,
                 root=False,
                 parent_side=side,
                 childsizing=childsizing,
+                args=args,
             )
 
             # Find max x, y the turtle reached
@@ -168,13 +225,28 @@ def heptagons(
             print_side_number(side, (r, g, b))
 
         guy.pensize(pensize)
-        guy.forward(size - size0)
-        guy.right(direction * 360 / 7)
+
+        if child_size <= size:
+            guy.forward(size - offset)
+        elif child_size > size:
+            pendown = guy.pen()["pendown"]
+            guy.pen(pendown=False)
+            guy.forward(offset)
+            guy.pen(pendown=pendown)
+            guy.forward(size)
+
+        angle = direction * 360 / 7
+        if args and args.random_angle:
+            angle += 0.5 * (random.random() - 0.5)
+        guy.right(angle)
 
         # Find max x, y the turtle reached
         x, y = guy.pos()
         mmax_x = max(int(x), mmax_x)
         mmax_y = max(int(y), mmax_y)
+
+    if progress_bar:
+        progress_bar.update(1)
 
     if root:
         # Show turtle on top right corner of drawing
@@ -184,38 +256,54 @@ def heptagons(
     return mmax_x, mmax_y
 
 
-def main(args=None):
+def main(test_args=None):
     """Parse command line args and draw art, then save as a vector graphics EPS file."""
-    arg = parser.parse_args(args)
-    arg_summary = f"{arg.levels}_{arg.size}_{arg.childsizing}"
+    args = parser.parse_args(test_args)
+    levels = args.levels
+    arg_summary = f"{levels}_{args.size}_{args.childsizing}_{args.colors}"
 
-    algo = CHILD_SIZING_ALGORITHMS[arg.childsizing]
+    guy.getscreen().title(arg_summary)
+    turtle.colormode(255)
+    if args.light_mode:
+        turtle.bgcolor((235, 235, 255))
+    else:
+        turtle.bgcolor((16, 16, 48))
+
+    algo = CHILD_SIZING_ALGORITHMS[args.childsizing]
     print(
         "arguments:",
         arg_summary,
         "size sequence:",
-        arg.size,
-        algo(arg.size),
-        algo(algo(arg.size)),
+        args.size,
+        algo(args.size, levels),
+        algo(algo(args.size, levels), levels - 1),
+        args,
     )
 
-    # TODO: --start-color --end-color --theme (brewer, custom, reverse, etc)
+    # TODO: --start-color --end-color --theme (Brewer custom, reverse, etc)
     # TODO: more child sizing
     # TODO: Minkowski metric child sizing for a seamless tiling (HOW????????????????????????????????????????)
-    turtle.colormode(255)
-    if arg.light_mode:
-        turtle.bgcolor((235, 235, 255))
-    else:
-        turtle.bgcolor((0, 0, 0))
-
-    filename = arg.filename
+    filename = args.filename
     filename = filename.replace("TIME", str(int(time.time())))
     filename = filename.replace("ARGS", arg_summary)
 
     start_time = time.time()
     ok = False
+    progress_bar = None
+    if tqdm:
+        # The root heptagon builds 7 heptagons around it (factor of 7)
+        # Each heptagon has 4 children on its outer edges (powers of 4)
+        progress_bar = tqdm.tqdm(total=sum(7 * 4**n for n in range(levels)))
     try:
-        heptagons(arg.size, levels=arg.levels, writing=arg.write, childsizing=algo)
+        heptagons(
+            args.size,
+            levels=levels,
+            max_levels=levels,
+            progress_bar=progress_bar,
+            writing=args.write,
+            childsizing=algo,
+            args=args,
+        )
         ok = True
     except (KeyboardInterrupt, EOFError):
         print("bye")
@@ -224,9 +312,14 @@ def main(args=None):
         guy.getscreen().getcanvas().postscript(file=filename)
         print("seconds elapsed:", time.time() - start_time)
         pprint.pprint(STATS)
+        if progress_bar:
+            progress_bar.close()
     if ok:
-        print("shutting down soon")
-        time.sleep(8)
+        print("FIN")
+        if args.quit:
+            print("shutting down")
+        else:
+            turtle.done()
 
 
 if __name__ == "__main__":
