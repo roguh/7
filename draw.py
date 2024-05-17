@@ -35,7 +35,6 @@ except ImportError as exc:
     )
     raise exc
 
-SKIP2 = True  # moar fast
 CHILD_SIZING_ALGORITHMS: dict[str, Callable[[float, int], float]] = {
     "id": lambda s, _: s,
     "p67": lambda s, _: s ** (6 / 7),
@@ -54,32 +53,46 @@ CHILD_SIZING_ALGORITHMS: dict[str, Callable[[float, int], float]] = {
 
 COLOR_CHOICES = []
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--levels", type=int, required=True)
-parser.add_argument("--size", type=int, default=50)
 parser.add_argument(
-    "--colors",
-    required=True,
+    "--filename",
+    type=str,
+    default="heptagon_tile_euclidean_TIME_ARGS.eps",
+    help="Screenshot name (TIME and ARGS are templated).",
 )
 parser.add_argument(
-    "--reverse-colors",
+    "--levels", type=int, required=True, help="Maximum recursion depth."
+)
+parser.add_argument("--size", type=int, default=50, help="Side length.")
+color_args = parser.add_mutually_exclusive_group(required=True)
+parser.add_argument(
+    "--childsizing",
+    choices=CHILD_SIZING_ALGORITHMS.keys(),
+    default="id",
+    help="How to determine side length.",
+)
+color_args.add_argument(
+    "--colors", help="REQUIRED or use --list-colors to print available."
+)
+color_args.add_argument("--list-colors", action="store_true", help="Print all themes.")
+parser.add_argument(
+    "--reverse-colors", action="store_true", help="Reverse the theme's sequence."
+)
+parser.add_argument(
+    "--light-mode",
     action="store_true",
+    help="Light background color. Note background color is not saved to screenshots.",
 )
+parser.add_argument(
+    "--skip2",
+    action="store_true",
+    help="Skip drawing 2 edges in every septagon. Results in interesting shapes and faster rendering.",
+)
+parser.add_argument("--random-angle", action="store_true")
 parser.add_argument("--quit", action="store_true")
 parser.add_argument("--write", action="store_true")
-parser.add_argument("--light-mode", action="store_true")
-parser.add_argument("--skip2", action="store_true")
-parser.add_argument("--random-angle", action="store_true")
-parser.add_argument(
-    "--childsizing", choices=CHILD_SIZING_ALGORITHMS.keys(), default="id"
-)
-parser.add_argument(
-    "--filename", type=str, default="heptagon_tile_euclidean_TIME_ARGS.eps"
-)
 
 STATS = {"SIZES": {}, "TOTAL": 0, "SIDES": 0, "TOTAL_PER": defaultdict(lambda: 0)}
-guy = turtle.Turtle()
-guy.shape("turtle")
-guy.shapesize(2, 2)
+guy: turtle.Turtle | None = None
 
 
 # Example: ['YlGnBu']['9']
@@ -90,7 +103,7 @@ BrewerDictType = dict[str, dict[BrewerSubThemeType, list[ColorType]]]
 # 3456789
 
 
-def load_themes(filename: str="colorbrewer_rgb_3int.json.zip") -> BrewerDictType:
+def load_themes(filename: str = "colorbrewer_rgb_3int.json.zip") -> BrewerDictType:
     """Parse colorbrewer.json file with accurate type hints."""
     with zipfile.ZipFile(filename) as zf:
         data: RawBrewerDictType = json.loads(zf.read(name="colorbrewer_rgb_3int.json"))
@@ -99,6 +112,7 @@ def load_themes(filename: str="colorbrewer_rgb_3int.json.zip") -> BrewerDictType
 
 def print_side_number(side: int, color: ColorType, font_size: int = 13):
     """Label each of the 7 side labels in Roman numerals."""
+    assert guy, "Turtle not initialized?"
     r, g, b = color
     label = str(side)
     label = "I II III IV V VI VII".split()[side % 7]
@@ -143,6 +157,8 @@ def heptagons(
     args=None,
 ) -> tuple[int, int]:
     """Draw a recursive, overlapping heptagon tile pattern."""
+    assert guy, "Turtle not initialized?"
+
     # Draw as fast as possible
     guy.speed("fastest")
     turtle.delay(0)
@@ -256,16 +272,37 @@ def heptagons(
 
 def main(test_args=None):
     """Parse command line args and draw art, then save as a vector graphics EPS file."""
+    start_time = time.time()
+
     args = parser.parse_args(test_args)
     levels = args.levels
     arg_summary = f"{levels}_{args.size}_{args.childsizing}_{args.colors}"
 
-    guy.getscreen().title(arg_summary)
+    color_levels: BrewerSubThemeType = str(max(3, min(10, levels)))
+    themes = load_themes()
+    for theme in themes:
+        COLOR_CHOICES.append(theme)
+    if (
+        args.list_colors
+        or args.colors not in themes
+        or color_levels not in themes[args.colors]
+    ):
+        print(
+            f"Known colors are: {'\n'.join(themes.keys())}\nLevels generally 3 to 10 or 3 to 12"
+        )
+        sys.exit(0xFF)
+
     turtle.colormode(255)
     if args.light_mode:
         turtle.bgcolor((235, 235, 255))
     else:
         turtle.bgcolor((16, 16, 48))
+
+    global guy
+    guy = turtle.Turtle()
+    guy.getscreen().title(arg_summary)
+    guy.shape("turtle")
+    guy.shapesize(2, 2)
 
     algo = CHILD_SIZING_ALGORITHMS[args.childsizing]
     print(
@@ -285,28 +322,18 @@ def main(test_args=None):
     filename = filename.replace("TIME", str(int(time.time())))
     filename = filename.replace("ARGS", arg_summary)
 
-    start_time = time.time()
+    colors = themes[args.colors][color_levels]
+    if args.reverse_colors:
+        colors.reverse()
+    if args and args.colors:
+        colors.insert(levels, (0, 0, 0))
+
     ok = False
     progress_bar = None
     if tqdm:
         # The root heptagon builds 7 heptagons around it (factor of 7)
         # Each heptagon has 4 children on its outer edges (powers of 4)
         progress_bar = tqdm.tqdm(total=sum(7 * 4**n for n in range(levels)))
-
-    color_levels: BrewerSubThemeType = str(max(3, min(10, levels)))
-    themes = load_themes()
-    for theme in themes:
-        COLOR_CHOICES.append(theme)
-    try:
-        colors = themes[args.colors][color_levels]
-    except KeyError:
-        print(f"Unknown color {args.colors} {color_levels}")
-        print(f"Known: {'\n'.join(themes.keys())}\nLevels 3 to 10")
-        sys.exit(0xFF)
-    if args.reverse_colors:
-        colors.reverse()
-    if args and args.colors:
-        colors.insert(levels, (0, 0, 0))
 
     try:
         heptagons(
