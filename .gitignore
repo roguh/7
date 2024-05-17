@@ -3,3 +3,4 @@
 *.svg
 *.eps
 *.png
+__pycache__
